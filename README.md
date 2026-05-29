@@ -9,7 +9,8 @@ devices**.
 </p>
 
 
-Built in Go with the [Charm](https://charm.sh) stack (Bubble Tea + Lipgloss). Inspired by [nap](https://github.com/maaslalani/nap)
+Built in Go with the [Charm](https://charm.sh) stack (Bubble Tea + Lipgloss). Inspired by [nap](https://github.com/maaslalani/nap).
+
 Some aspects were generated with AI. Especially the design nd visuals (i am bad at designing 😊)
 
 ## Why
