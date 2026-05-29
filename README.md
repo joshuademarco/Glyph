@@ -1,4 +1,4 @@
-# glyph
+# Glyph
 
 A fast TUI **and** pipe-friendly CLI for storing code snippets and shell
 commands, then finding, copying, running, and **syncing them across all your
@@ -10,7 +10,7 @@ devices**.
   snippet selected so the preview pane is populated.
 -->
 <p align="center">
-  <img src="docs/screenshot.png" alt="glyph TUI — folders, snippet list, preview" width="820">
+  <img src="Preview Image.png" alt="glyph TUI — folders, snippet list, preview" width="820">
 </p>
 
 ```
