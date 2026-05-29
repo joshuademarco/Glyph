@@ -1,0 +1,7 @@
+# build output
+/glyph
+/glyph.exe
+/dist/
+
+# local data accidentally placed in repo
+*.tmp
