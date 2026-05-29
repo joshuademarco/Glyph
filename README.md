@@ -13,21 +13,8 @@ devices**.
   <img src="Preview Image.png" alt="glyph TUI — folders, snippet list, preview" width="820">
 </p>
 
-```
-┌ Folders ─────┐┌ Snippets · Docker/Compose ───────────────────┐
-│ ∗ All        ││ ❯ Recreate one service without deps   yml 2d │
-│ ★ Favorites  ││ · Tail logs across all services        sh 5d │
-│ ◷ Recent     ││ ★ Prune everything, volumes & nets    sh 1w │
-│ ! Dangerous  │└──────────────────────────────────────────────┘
-│ ▸ Docker     │┌ Preview ─────────────────────────────────────┐
-│ ▸ Kubernetes ││ Recreate one service without deps        yml │
-│ ▸ Git        ││ # recreate just the api container            │
-└──────────────┘│ docker compose up -d --no-deps ... api       │
- NORMAL  j/k move · ⏎ yank · e edit · n new · / find · ? help
-```
 
-Built in Go with the [Charm](https://charm.sh) stack (Bubble Tea + Lipgloss).
-The UI follows the GitHub dark-dimmed design in [`TUI Design/`](./TUI%20Design).
+Built in Go with the [Charm](https://charm.sh) stack (Bubble Tea + Lipgloss). Inspired by [nap](https://github.com/maaslalani/nap)
 
 ## Why
 
