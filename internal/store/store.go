@@ -3,6 +3,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -131,7 +132,24 @@ func (s *Store) Resolve(ref string) (*model.Snippet, error) {
 	if hits := s.Search(ref); len(hits) == 1 {
 		return hits[0], nil
 	} else if len(hits) > 1 {
-		return nil, fmt.Errorf("%q is ambiguous: %d matches (try a more specific term or an id)", ref, len(hits))
+		const maxList = 8
+		var b strings.Builder
+		fmt.Fprintf(&b, "%q is ambiguous: %d matches (try a more specific term or an id)", ref, len(hits))
+		shown := len(hits)
+		if shown > maxList {
+			shown = maxList
+		}
+		for _, sn := range hits[:shown] {
+			folder := ""
+			if sn.Folder != "" {
+				folder = sn.Folder + "/"
+			}
+			fmt.Fprintf(&b, "\n  %s  %s%s", sn.ID[:min(6, len(sn.ID))], folder, sn.Title)
+		}
+		if len(hits) > maxList {
+			fmt.Fprintf(&b, "\n  … %d more", len(hits)-maxList)
+		}
+		return nil, errors.New(b.String())
 	}
 	return nil, fmt.Errorf("no snippet matching %q", ref)
 }

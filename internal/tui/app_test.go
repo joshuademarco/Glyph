@@ -152,14 +152,19 @@ func TestClickMovesFocusAndSelects(t *testing.T) {
 		t.Fatalf("click on preview did not focus preview, got %v", m.focus)
 	}
 
-	// click a folder row: rows are [All,Fav,Recent,Danger, divider, <folders>…]
-	// body line 5 (y=6) is the first real folder.
+	// click a folder row: rows are [All,Fav,Recent,Danger, divider, <group>, <folder>…]
+	// body line 5 (y=6) is the first group; line 6 (y=7) is its first subfolder.
 	m = m.handleClick(1, 6)
 	if m.focus != focusFolders {
 		t.Fatalf("click on folders did not focus folders, got %v", m.focus)
 	}
-	if m.folders[m.folderIdx].kind != "folder" {
-		t.Fatalf("expected a folder selected, got kind %q", m.folders[m.folderIdx].kind)
+	if got := m.folders[m.folderIdx].kind; got != "group" {
+		t.Fatalf("expected a group selected, got kind %q", got)
+	}
+	m = m.handleClick(1, 7)
+	cur := m.folders[m.folderIdx]
+	if cur.kind != "folder" {
+		t.Fatalf("expected a folder selected, got kind=%q", cur.kind)
 	}
 }
 

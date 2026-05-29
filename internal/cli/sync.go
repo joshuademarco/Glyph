@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joshuademarco/glyph/internal/config"
 	"github.com/joshuademarco/glyph/internal/model"
@@ -61,20 +62,32 @@ func syncSetupCmd() *cobra.Command {
 		Use:   "setup <gist|file> [path]",
 		Short: "Configure a sync backend",
 		Long: "Configure how glyph syncs.\n\n" +
+			"Run with no arguments for a guided setup, or pass a backend directly:\n\n" +
+			"  glyph sync setup                 # interactive: pick a backend and answer prompts\n" +
 			"  glyph sync setup gist            # then paste a token when prompted\n" +
 			"  glyph sync setup gist <id>       # reuse an existing gist id\n" +
 			"  glyph sync setup file <path>     # e.g. ~/Dropbox/glyph/snippets.json",
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
-			switch args[0] {
+
+			backend := ""
+			if len(args) > 0 {
+				backend = args[0]
+			} else {
+				backend = guidedBackend()
+			}
+
+			switch backend {
 			case "gist":
 				cfg.Sync = "gist"
 				if len(args) > 1 {
 					cfg.GistID = args[1]
+				} else if id := prompt("Existing gist id (leave blank to create one): "); id != "" {
+					cfg.GistID = id
 				}
 				fmt.Fprintln(os.Stderr, "Create a token at https://github.com/settings/tokens with the \"gist\" scope.")
 				tok := prompt("GitHub token: ")
@@ -85,13 +98,19 @@ func syncSetupCmd() *cobra.Command {
 					cfg.GistToken = tok
 				}
 			case "file":
-				if len(args) < 2 {
+				path := ""
+				if len(args) > 1 {
+					path = args[1]
+				} else {
+					path = prompt("Path inside a synced folder (e.g. ~/Dropbox/glyph/snippets.json): ")
+				}
+				if path == "" {
 					return fail("file backend needs a path: glyph sync setup file <path>")
 				}
 				cfg.Sync = "file"
-				cfg.FilePath = args[1]
+				cfg.FilePath = path
 			default:
-				return fail("unknown backend %q (use gist or file)", args[0])
+				return fail("unknown backend %q (use gist or file)", backend)
 			}
 			if err := cfg.Save(); err != nil {
 				return err
@@ -102,6 +121,25 @@ func syncSetupCmd() *cobra.Command {
 		},
 	}
 	return c
+}
+
+// guidedBackend asks the user which sync backend to configure, looping until a recognised choice is given.
+func guidedBackend() string {
+	fmt.Fprintln(os.Stderr, "Choose a sync backend:")
+	fmt.Fprintln(os.Stderr, "  gist  — a private GitHub Gist (needs only a token; works anywhere)")
+	fmt.Fprintln(os.Stderr, "  file  — a file in a folder you already sync (Dropbox/iCloud/OneDrive/Syncthing)")
+	for {
+		switch strings.ToLower(strings.TrimSpace(prompt("Backend [gist/file]: "))) {
+		case "gist", "g":
+			return "gist"
+		case "file", "f":
+			return "file"
+		case "":
+			return ""
+		default:
+			fmt.Fprintln(os.Stderr, "please type \"gist\" or \"file\"")
+		}
+	}
 }
 
 func syncStatusCmd() *cobra.Command {

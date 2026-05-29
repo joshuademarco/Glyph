@@ -253,6 +253,42 @@ func (e editorModel) view(width, contentH int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
+// hitField maps a click in the editor screen to the field whose row was hit.
+// Returns false when the click lands on chrome (borders, gaps) or the
+// non-interactive right column.
+func (e editorModel) hitField(x, y int) (editorField, bool) {
+	leftW := e.width - 30
+	if leftW < 30 {
+		leftW = e.width
+	}
+	if x < 0 || x >= leftW {
+		return 0, false
+	}
+
+	metaInnerLen := 4
+	if e.field == fFolder {
+		if len(e.folderMatches(5)) > 0 {
+			metaInnerLen += 2
+		}
+	}
+	metaH := metaInnerLen + 1 + 2 // pane: innerH (= len+1) + top + bottom borders
+	notesH := 4                   // pane: innerH=2 + 2 borders
+
+	// meta content rows: y=1..4 → title, folder, tags, lang
+	if y >= 1 && y <= 4 {
+		return editorField(y - 1), true
+	}
+	// notes content row sits just below the meta pane's top border
+	if y == metaH+1 {
+		return fNotes, true
+	}
+	// anywhere inside the command pane (skipping its top border)
+	if y >= metaH+notesH+1 {
+		return fCommand, true
+	}
+	return 0, false
+}
+
 func (e editorModel) commandVars() []string {
 	s := &model.Snippet{Command: e.command.Value()}
 	return s.Variables()

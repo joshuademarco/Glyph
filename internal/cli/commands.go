@@ -384,10 +384,12 @@ func editorInput(initial string) (string, error) {
 	return strings.TrimRight(string(b), "\n"), nil
 }
 
+// stdinReader is shared across prompts
+var stdinReader = bufio.NewReader(os.Stdin)
+
 func prompt(label string) string {
 	fmt.Fprint(os.Stderr, label)
-	r := bufio.NewReader(os.Stdin)
-	line, _ := r.ReadString('\n')
+	line, _ := stdinReader.ReadString('\n')
 	return strings.TrimRight(line, "\r\n")
 }
 

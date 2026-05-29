@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,13 +32,15 @@ const (
 	focusPreview
 )
 
-// folderItem is a row in the left sidebar: either a smart group or a folder.
+// folderItem is a row in the left sidebar: a smart group, a user group section,
+// or a folder. Groups are pure section headers and never contain snippets directly.
 type folderItem struct {
-	label  string
-	icon   string
-	kind   string // all | fav | recent | danger | folder
-	folder string
-	count  int
+	label     string
+	icon      string
+	kind      string // all | fav | recent | danger | group | folder
+	folder    string // for "group": group name; for "folder": full "Group/Folder" path or single-segment
+	count     int
+	collapsed bool // for kind="group"
 }
 
 // Model is the root Bubble Tea model.
@@ -51,6 +54,7 @@ type Model struct {
 
 	folders   []folderItem
 	folderIdx int
+	collapsed map[string]bool // group name -> collapsed
 
 	snippets []*model.Snippet
 	listIdx  int
@@ -79,11 +83,12 @@ func New(st *store.Store) Model {
 	pi.PlaceholderStyle = stFaint
 
 	m := Model{
-		st:       st,
-		screen:   screenBrowse,
-		focus:    focusFolders,
-		palInput: pi,
-		editor:   newEditor(),
+		st:        st,
+		screen:    screenBrowse,
+		focus:     focusFolders,
+		palInput:  pi,
+		editor:    newEditor(),
+		collapsed: map[string]bool{},
 	}
 	m.rebuildFolders()
 	m.refilter()
@@ -110,13 +115,76 @@ func (m *Model) rebuildFolders() {
 		{label: "Recently used", icon: "◷", kind: "recent", count: count(isRecent)},
 		{label: "Dangerous", icon: "!", kind: "danger", count: count(func(s *model.Snippet) bool { return s.Dangerous })},
 	}
-	for _, f := range lib.Folders() {
-		c := count(func(s *model.Snippet) bool { return s.Folder == f })
-		items = append(items, folderItem{label: f, icon: "▸", kind: "folder", folder: f, count: c})
+
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
 	}
+
+	// Partition folder paths into groups (with subfolders) and legacy
+	// single-segment entries rendered at root.
+	groupChildren := map[string]map[string]bool{}
+	var ungrouped []string
+	seenUngrouped := map[string]bool{}
+	for _, s := range lib.Snippets {
+		f := s.Folder
+		if f == "" {
+			continue
+		}
+		if i := strings.Index(f, "/"); i >= 0 {
+			g, sub := f[:i], f[i+1:]
+			if groupChildren[g] == nil {
+				groupChildren[g] = map[string]bool{}
+			}
+			groupChildren[g][sub] = true
+		} else if !seenUngrouped[f] {
+			seenUngrouped[f] = true
+			ungrouped = append(ungrouped, f)
+		}
+	}
+
+	groupNames := make([]string, 0, len(groupChildren))
+	for g := range groupChildren {
+		groupNames = append(groupNames, g)
+	}
+	sort.Strings(groupNames)
+	sort.Strings(ungrouped)
+
+	for _, g := range groupNames {
+		prefix := g + "/"
+		gc := count(func(s *model.Snippet) bool {
+			return s.Folder == g || strings.HasPrefix(s.Folder, prefix)
+		})
+		collapsed := m.collapsed[g]
+		items = append(items, folderItem{
+			label: g, kind: "group", folder: g, count: gc, collapsed: collapsed,
+		})
+		if collapsed {
+			continue
+		}
+		subs := make([]string, 0, len(groupChildren[g]))
+		for sub := range groupChildren[g] {
+			subs = append(subs, sub)
+		}
+		sort.Strings(subs)
+		for _, sub := range subs {
+			full := g + "/" + sub
+			cc := count(func(s *model.Snippet) bool { return s.Folder == full })
+			items = append(items, folderItem{
+				label: sub, kind: "folder", folder: full, count: cc,
+			})
+		}
+	}
+	for _, u := range ungrouped {
+		c := count(func(s *model.Snippet) bool { return s.Folder == u })
+		items = append(items, folderItem{label: u, kind: "folder", folder: u, count: c})
+	}
+
 	m.folders = items
 	if m.folderIdx >= len(items) {
 		m.folderIdx = len(items) - 1
+	}
+	if m.folderIdx < 0 {
+		m.folderIdx = 0
 	}
 }
 
@@ -143,6 +211,8 @@ func (m *Model) refilter() {
 			keep = isRecent(s)
 		case "danger":
 			keep = s.Dangerous
+		case "group":
+			keep = s.Folder == fi.folder || strings.HasPrefix(s.Folder, fi.folder+"/")
 		case "folder":
 			keep = s.Folder == fi.folder
 		}
@@ -165,6 +235,23 @@ func (m *Model) refilter() {
 	if m.listIdx < 0 {
 		m.listIdx = 0
 	}
+}
+
+// toggleGroup flips the collapsed state of a group and rebuilds the sidebar,
+// keeping selection anchored on the same group row.
+func (m *Model) toggleGroup(group string) {
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	m.collapsed[group] = !m.collapsed[group]
+	m.rebuildFolders()
+	for i, f := range m.folders {
+		if f.kind == "group" && f.folder == group {
+			m.folderIdx = i
+			break
+		}
+	}
+	m.refilter()
 }
 
 func (m *Model) selected() *model.Snippet {
@@ -264,6 +351,14 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.yankSelected()
+	case " ":
+		if m.focus == focusFolders && len(m.folders) > 0 {
+			cur := m.folders[m.folderIdx]
+			if cur.kind == "group" {
+				m.toggleGroup(cur.folder)
+			}
+		}
+		return m, nil
 	case "y":
 		return m.yankSelected()
 	case "e":
@@ -527,8 +622,9 @@ func browseLayout(w, h int) browseGeo {
 // for the non-selectable "Folders" divider — mirroring folderBody's layout.
 func (m Model) folderRowToIdx() []int {
 	var rows []int
+	isFolderish := func(k string) bool { return k == "group" || k == "folder" }
 	for i, f := range m.folders {
-		if f.kind == "folder" && (i == 0 || m.folders[i-1].kind != "folder") {
+		if isFolderish(f.kind) && (i == 0 || !isFolderish(m.folders[i-1].kind)) {
 			rows = append(rows, -1)
 		}
 		rows = append(rows, i)
@@ -538,7 +634,17 @@ func (m Model) folderRowToIdx() []int {
 
 // handleClick moves focus (and selects a row) based on which pane was clicked.
 func (m Model) handleClick(x, y int) Model {
-	if m.screen != screenBrowse || m.paletteOpen {
+	if m.paletteOpen {
+		return m
+	}
+	if m.screen == screenEditor {
+		if f, ok := m.editor.hitField(x, y); ok {
+			m.editor.field = f
+			m.editor.focus()
+		}
+		return m
+	}
+	if m.screen != screenBrowse {
 		return m
 	}
 	g := browseLayout(m.width, m.height)

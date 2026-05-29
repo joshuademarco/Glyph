@@ -26,7 +26,7 @@ func (m Model) viewBrowse() string {
 	listBody := m.listBody(rightW - 2)
 	listPane := pane("Snippets · "+fi, "2", listBody, rightW-2, listBoxH-2, colGreen, m.focus == focusList)
 
-	prevBody := m.previewBody(rightW - 2)
+	prevBody := m.previewBody(rightW-2, previewBoxH-2)
 	prevPane := pane("Preview", "3", prevBody, rightW-2, previewBoxH-2, colBlue, m.focus == focusPreview)
 
 	right := lipgloss.JoinVertical(lipgloss.Left, listPane, "", prevPane)
@@ -50,8 +50,9 @@ func (m Model) statusLine() string {
 
 func (m Model) folderBody(w int) []string {
 	var out []string
+	isFolderish := func(k string) bool { return k == "group" || k == "folder" }
 	for i, f := range m.folders {
-		if f.kind == "folder" && (i == 0 || m.folders[i-1].kind != "folder") {
+		if isFolderish(f.kind) && (i == 0 || !isFolderish(m.folders[i-1].kind)) {
 			out = append(out, divlabel("Folders", w))
 		}
 		sel := m.focus == focusFolders && i == m.folderIdx
@@ -71,8 +72,15 @@ func iconFor(f folderItem) string {
 		return stRed.Render("!")
 	case "all":
 		return stBlue.Render("∗")
+	case "group":
+		if f.collapsed {
+			return stBlue.Render("▸")
+		}
+		return stBlue.Render("▾")
+	case "folder":
+		return stDim.Render("·")
 	default:
-		return stBlue.Render("▸")
+		return " "
 	}
 }
 
@@ -100,43 +108,54 @@ func (m Model) listBody(w int) []string {
 	return out
 }
 
-func (m Model) previewBody(w int) []string {
+func (m Model) previewBody(w, innerH int) []string {
 	s := m.selected()
 	if s == nil {
 		return []string{stFaint.Render("nothing selected")}
 	}
-	var out []string
+	var top []string
 	head := stBlue.Bold(true).Render(short(s.Title, w-8))
 	if s.Lang != "" {
 		head += "  " + langStyle(s.Lang).Render(s.Lang)
 	}
-	out = append(out, head)
+	top = append(top, head)
 	if s.Notes != "" {
 		for _, ln := range strings.Split(lipgloss.NewStyle().Width(w).Foreground(colFgDim).Render(s.Notes), "\n") {
-			out = append(out, ln)
+			top = append(top, ln)
 		}
 	}
-	out = append(out, "")
-	out = append(out, codeBlock(s.Command, w)...)
-	out = append(out, "")
+	top = append(top, "")
+	top = append(top, codeBlock(s.Command, w)...)
+
 	stats := fmt.Sprintf("used %d× · ", s.UseCount)
 	if s.LastUsed != nil {
 		stats += "last " + timeAgo(*s.LastUsed)
 	} else {
 		stats += "never used"
 	}
-	line := stDim.Render(stats)
+	statsLine := stDim.Render(stats)
 	if len(s.Tags) > 0 {
 		ts := make([]string, len(s.Tags))
 		for i, t := range s.Tags {
 			ts[i] = "#" + t
 		}
-		line += stFaint.Render("   " + strings.Join(ts, " "))
+		statsLine += stFaint.Render("   " + strings.Join(ts, " "))
 	}
-	out = append(out, line)
+	var bottom []string
+	bottom = append(bottom, statsLine)
 	if s.Source != "" {
-		out = append(out, stFaint.Render("source "+s.Source))
+		bottom = append(bottom, stFaint.Render("source "+s.Source))
 	}
+
+	pad := innerH - len(top) - len(bottom)
+	if pad < 1 {
+		pad = 1
+	}
+	out := top
+	for i := 0; i < pad; i++ {
+		out = append(out, "")
+	}
+	out = append(out, bottom...)
 	return out
 }
 
@@ -250,6 +269,7 @@ func (m Model) viewHelp() string {
 		kv("j / k", "move within pane"),
 		kv("h / l · tab", "switch pane"),
 		kv("g / G", "top / bottom"),
+		kv("space", "collapse / expand group"),
 		kv("⏎ · y", "yank command to clipboard"),
 		kv("x", "run command in shell"),
 		kv("e / n", "edit / new snippet"),
