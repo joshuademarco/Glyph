@@ -4,17 +4,13 @@ A fast TUI **and** pipe-friendly CLI for storing code snippets and shell
 commands, then finding, copying, running, and **syncing them across all your
 devices**.
 
-<!--
-  Drop a screenshot/GIF of the TUI into ./docs/screenshot.png to fill this slot.
-  Suggested size: ~1200×700, dark-dimmed terminal, browse screen with a
-  snippet selected so the preview pane is populated.
--->
 <p align="center">
-  <img src="Preview Image.png" alt="glyph TUI — folders, snippet list, preview" width="820">
+  <img src="Preview Image.png" alt="glyph TUI; folders, snippet list, preview" width="820">
 </p>
 
 
 Built in Go with the [Charm](https://charm.sh) stack (Bubble Tea + Lipgloss). Inspired by [nap](https://github.com/maaslalani/nap)
+Some aspects were generated with AI. Especially the design nd visuals (i am bad at designing 😊)
 
 ## Why
 
@@ -97,7 +93,7 @@ Add the install directory to your user `PATH`:
 ```
 
 Glyph works in Windows Terminal, PowerShell, `cmd.exe`, and inside WSL. Mouse
-support and 256-colour styling need a modern terminal — Windows Terminal is the
+support and 256-colour styling need a modern terminal; Windows Terminal is the
 recommended host.
 
 ### Build from source
@@ -182,7 +178,7 @@ match, so `glyph get deploy` usually just works.
 
 ### Per-OS command behavior
 
-`glyph run` executes the snippet body in **your platform's shell** — there is
+`glyph run` executes the snippet body in **your platform's shell**; there is
 no portable command syntax, glyph just hands the string to the right
 interpreter:
 
@@ -237,7 +233,7 @@ Configure a backend once with `glyph sync setup`, then run `glyph sync` on each
 device whenever you want to push/pull. Run `glyph sync status` at any time to
 see what's configured.
 
-### Option A — GitHub Gist (recommended)
+### Option A; GitHub Gist (recommended)
 
 Needs only HTTPS plus a personal access token, so it works on any machine with
 network access and nothing to host.
@@ -261,7 +257,7 @@ network access and nothing to host.
 The token is stored locally in `config.json` with mode `0600`. To rotate it,
 run `glyph sync setup gist` again and paste the new token.
 
-### Option B — Shared file (Dropbox / iCloud / OneDrive / Syncthing)
+### Option B; Shared file (Dropbox / iCloud / OneDrive / Syncthing)
 
 Point glyph at a file inside a folder that another tool already replicates. No
 account, no token, broadest compatibility.
@@ -277,9 +273,9 @@ glyph sync
 ```
 
 Run `glyph sync` on each device after the host folder has finished
-syncing — that way glyph always merges with the latest remote state.
+syncing; that way glyph always merges with the latest remote state.
 
-### Option C — Custom backend
+### Option C; Custom backend
 
 Both built-in backends implement the same `Backend` interface
 ([`internal/sync`](./internal/sync)), so a custom HTTP endpoint (an S3 bucket, a
@@ -287,7 +283,7 @@ private API, …) can be dropped in without touching the rest of the app.
 
 ### Automating it
 
-Glyph never syncs on its own — wire it into your shell or scheduler if you want
+Glyph never syncs on its own; wire it into your shell or scheduler if you want
 it automatic:
 
 ```sh
@@ -316,22 +312,6 @@ Override the whole directory with `GLYPH_HOME`.
 - `snippets.json`, your library (plain JSON, easy to back up or hand-edit).
 - `config.json`, sync settings (tokens stored `0600`).
 
-## Layout
-
-```
-main.go                 entry point
-internal/
-  model/                Snippet & Library types, variable parsing
-  store/                JSON persistence, filtering, fuzzy search
-  config/               paths & settings
-  clipboard/            native clipboard + OSC 52 fallback (works over SSH)
-  sync/                 Backend interface, Gist + File backends, merge
-  cli/                  Cobra commands (add/get/run/sync/…)
-  tui/                  Bubble Tea UI (browse/editor/palette/help)
-TUI Design/             the original design mockups this UI follows
-scripts/build-all.sh    cross-compile matrix
-```
-
 ## License
 
-MIT
+[MIT](./LICENSE)
