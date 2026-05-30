@@ -134,7 +134,7 @@ func (m Model) previewBody(w, innerH int) []string {
 		}
 	}
 	top = append(top, "")
-	top = append(top, codeBlock(s.Command, w)...)
+	top = append(top, codeBlock(s.Command, s.Lang, w)...)
 
 	stats := fmt.Sprintf("used %d× · ", s.UseCount)
 	if s.LastUsed != nil {

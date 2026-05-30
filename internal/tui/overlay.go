@@ -144,7 +144,7 @@ func (m Model) viewVars() string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, stFaint.Render("Resolved"))
-	lines = append(lines, codeBlock(m.varSnippet.Resolve(m.varValues()), inner-2)...)
+	lines = append(lines, codeBlock(m.varSnippet.Resolve(m.varValues()), m.varSnippet.Lang, inner-2)...)
 
 	box := pane(title, "", lines, inner, len(lines)+1, colGreen, true)
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Top,

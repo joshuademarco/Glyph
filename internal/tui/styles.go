@@ -46,12 +46,17 @@ var (
 	stTagYellow = lipgloss.NewStyle().Foreground(colYellow)
 	stTagPurple = lipgloss.NewStyle().Foreground(colPurple)
 
-	// code-preview token colors
-	stKwFn  = lipgloss.NewStyle().Foreground(colBlue)
-	stKwFl  = lipgloss.NewStyle().Foreground(colYellow)
-	stKwCm  = lipgloss.NewStyle().Foreground(colFgFaint).Italic(true)
-	stKwStr = lipgloss.NewStyle().Foreground(colCyan)
-	stLn    = lipgloss.NewStyle().Foreground(colFgFaint)
+	// syntax-highlight token colors — mapped from chroma token categories in
+	// highlight.go. All derive from the col* palette so a user theme overrides
+	// them for free.
+	stHlKw  = lipgloss.NewStyle().Foreground(colRed)                  // keywords
+	stHlFn  = lipgloss.NewStyle().Foreground(colPurple)               // function / builtin / class names
+	stHlVar = lipgloss.NewStyle().Foreground(colCyan)                 // variables, attributes, {{placeholders}}
+	stHlStr = lipgloss.NewStyle().Foreground(colGreen)                // string literals
+	stHlNum = lipgloss.NewStyle().Foreground(colBlue)                 // numeric literals
+	stHlOp  = lipgloss.NewStyle().Foreground(colFgDim)                // operators & punctuation
+	stKwCm  = lipgloss.NewStyle().Foreground(colFgFaint).Italic(true) // comments
+	stLn    = lipgloss.NewStyle().Foreground(colFgFaint)              // line numbers
 )
 
 // refreshStyles rebuilds every derived st* style from the current col* palette.
@@ -74,10 +79,13 @@ func refreshStyles() {
 	stTagYellow = lipgloss.NewStyle().Foreground(colYellow)
 	stTagPurple = lipgloss.NewStyle().Foreground(colPurple)
 
-	stKwFn = lipgloss.NewStyle().Foreground(colBlue)
-	stKwFl = lipgloss.NewStyle().Foreground(colYellow)
+	stHlKw = lipgloss.NewStyle().Foreground(colRed)
+	stHlFn = lipgloss.NewStyle().Foreground(colPurple)
+	stHlVar = lipgloss.NewStyle().Foreground(colCyan)
+	stHlStr = lipgloss.NewStyle().Foreground(colGreen)
+	stHlNum = lipgloss.NewStyle().Foreground(colBlue)
+	stHlOp = lipgloss.NewStyle().Foreground(colFgDim)
 	stKwCm = lipgloss.NewStyle().Foreground(colFgFaint).Italic(true)
-	stKwStr = lipgloss.NewStyle().Foreground(colCyan)
 	stLn = lipgloss.NewStyle().Foreground(colFgFaint)
 }
 

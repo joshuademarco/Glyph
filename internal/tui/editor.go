@@ -242,7 +242,7 @@ func (e editorModel) view(width, contentH int) string {
 	}
 	varsPane := pane("Variables", "", varBody, rightW-2, len(varBody)+1, colBorder, false)
 
-	resInner := codeBlock(e.command.Value(), rightW-4)
+	resInner := codeBlock(e.command.Value(), e.lang.Value(), rightW-4)
 	resH := contentH - lipgloss.Height(varsPane) - 1
 	if resH < 3 {
 		resH = 3
