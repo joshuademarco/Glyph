@@ -78,8 +78,20 @@ func Sync(local *model.Library, b Backend, save func(*model.Library) error) (*Re
 
 func merge(local, remote *model.Library) (*model.Library, *Result) {
 	res := &Result{}
-	byID := map[string]*model.Snippet{}
 
+	// Union tombstones from both sides, keeping the latest deletion time per ID.
+	tombs := map[string]time.Time{}
+	for id, t := range local.Deleted {
+		tombs[id] = t
+	}
+	for id, t := range remote.Deleted {
+		if cur, ok := tombs[id]; !ok || t.After(cur) {
+			tombs[id] = t
+		}
+	}
+
+	// Union snippets by ID, last-write-wins on UpdatedAt.
+	byID := map[string]*model.Snippet{}
 	for _, s := range local.Snippets {
 		byID[s.ID] = s
 	}
@@ -98,7 +110,21 @@ func merge(local, remote *model.Library) (*model.Library, *Result) {
 		}
 	}
 
+	// Apply tombstones.
+	for id, t := range tombs {
+		s, ok := byID[id]
+		if ok && s.UpdatedAt.After(t) {
+			delete(tombs, id)
+			continue
+		}
+		if ok {
+			delete(byID, id)
+			res.Deleted++
+		}
+	}
+
 	out := model.NewLibrary()
+	out.Deleted = tombs
 	for _, s := range byID {
 		out.Snippets = append(out.Snippets, s)
 	}

@@ -83,14 +83,15 @@ func (s *Snippet) LooksDangerous() bool {
 
 // Library is the whole collection — the unit that is persisted and synced.
 type Library struct {
-	Schema    int        `json:"schema"`
-	Snippets  []*Snippet `json:"snippets"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	Schema    int                  `json:"schema"`
+	Snippets  []*Snippet           `json:"snippets"`
+	Deleted   map[string]time.Time `json:"deleted,omitempty"`
+	UpdatedAt time.Time            `json:"updatedAt"`
 }
 
 // NewLibrary returns an empty library at the current schema version.
 func NewLibrary() *Library {
-	return &Library{Schema: SchemaVersion, Snippets: []*Snippet{}, UpdatedAt: time.Now().UTC()}
+	return &Library{Schema: SchemaVersion, Snippets: []*Snippet{}, Deleted: map[string]time.Time{}, UpdatedAt: time.Now().UTC()}
 }
 
 // Find returns the snippet with the given ID, or nil.
@@ -116,6 +117,8 @@ func (l *Library) Add(s *Snippet) {
 	if s.LooksDangerous() {
 		s.Dangerous = true
 	}
+	// Clear any stale tombstone so a re-added ID is not deleted on next sync.
+	delete(l.Deleted, s.ID)
 	l.Snippets = append(l.Snippets, s)
 	l.UpdatedAt = now
 }
@@ -125,7 +128,12 @@ func (l *Library) Remove(id string) bool {
 	for i, s := range l.Snippets {
 		if s.ID == id {
 			l.Snippets = append(l.Snippets[:i], l.Snippets[i+1:]...)
-			l.UpdatedAt = time.Now().UTC()
+			now := time.Now().UTC()
+			if l.Deleted == nil {
+				l.Deleted = map[string]time.Time{}
+			}
+			l.Deleted[id] = now
+			l.UpdatedAt = now
 			return true
 		}
 	}
