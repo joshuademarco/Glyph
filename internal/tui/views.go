@@ -32,8 +32,11 @@ func (m Model) viewBrowse() string {
 	right := lipgloss.JoinVertical(lipgloss.Left, listPane, "", prevPane)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, folderPane, " ", right)
 
-	keys := [][2]string{{"j/k", "move"}, {"⏎", "yank"}, {"e", "edit"}, {"n", "new"}, {"x", "run"}, {"/", "find"}, {"dd", "del"}, {"?", "help"}}
-	right2 := fmt.Sprintf("%d of %d", min1(m.listIdx+1, len(m.snippets)), len(m.snippets))
+	keys := [][2]string{{"j/k", "move"}, {"⏎", "yank"}, {"x", "run"}, {"e/n", "edit/new"}, {"/", "find"}, {"s", "sort"}, {"?", "help"}}
+	right2 := fmt.Sprintf("%d of %d · %s", min1(m.listIdx+1, len(m.snippets)), len(m.snippets), m.sortMode.label())
+	if len(m.marked) > 0 {
+		right2 = fmt.Sprintf("%d marked · ", len(m.marked)) + right2
+	}
 	if s := m.statusLine(); s != "" {
 		right2 = s
 	}
@@ -42,6 +45,9 @@ func (m Model) viewBrowse() string {
 }
 
 func (m Model) statusLine() string {
+	if m.busy != "" {
+		return m.busy
+	}
 	if m.status != "" && time.Since(m.statusTime) < 4*time.Second {
 		return m.status
 	}
@@ -50,10 +56,9 @@ func (m Model) statusLine() string {
 
 func (m Model) folderBody(w int) []string {
 	var out []string
-	isFolderish := func(k string) bool { return k == "group" || k == "folder" }
 	for i, f := range m.folders {
-		if isFolderish(f.kind) && (i == 0 || !isFolderish(m.folders[i-1].kind)) {
-			out = append(out, divlabel("Folders", w))
+		if d := m.dividerBefore(i); d != "" {
+			out = append(out, divlabel(d, w))
 		}
 		sel := m.focus == focusFolders && i == m.folderIdx
 		icon := iconFor(f)
@@ -79,6 +84,8 @@ func iconFor(f folderItem) string {
 		return stBlue.Render("▾")
 	case "folder":
 		return stDim.Render("·")
+	case "tag":
+		return stCyan.Render("#")
 	default:
 		return " "
 	}
@@ -95,7 +102,9 @@ func (m Model) listBody(w int) []string {
 		if s.Favorite {
 			icon = stYell.Render("★")
 		}
-		if sel {
+		if m.marked[s.ID] {
+			icon = stGreen.Render("✓")
+		} else if sel {
 			icon = stGreen.Render("❯")
 		}
 		right := ""
@@ -188,7 +197,11 @@ func (m Model) viewPalette() string {
 	inner := floatW - 2
 
 	input := stBlue.Render("❯") + " " + m.palInput.View()
-	scope := stFaint.Render("all folders · fuzzy")
+	scopeText := "all folders · fuzzy"
+	if m.palScoped {
+		scopeText = "this scope · fuzzy"
+	}
+	scope := stFaint.Render(scopeText)
 	header := cell(input, inner-lipgloss.Width(scope)-1) + scope
 
 	var rows []string
@@ -219,7 +232,7 @@ func (m Model) viewPalette() string {
 		rows = append(rows, sideRow(stGreen.Render("+"), "Create snippet “"+m.palInput.Value()+"”", stFaint.Render("⌃N"), inner, true, colGreen))
 	}
 
-	footer := stFaint.Render(fmt.Sprintf("↑↓ move · ⏎ yank · ⌃N new · %d of %d", min1(m.palIdx+1, len(m.palResults)), len(m.palResults)))
+	footer := stFaint.Render(fmt.Sprintf("↑↓ move · ⏎ yank · ⌃N new · ⌃F scope · %d of %d", min1(m.palIdx+1, len(m.palResults)), len(m.palResults)))
 
 	bodyLines := []string{header, divlabel("Snippets", inner)}
 	bodyLines = append(bodyLines, rows...)
@@ -230,7 +243,7 @@ func (m Model) viewPalette() string {
 	placed := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Top,
 		lipgloss.NewStyle().MarginTop(3).Render(box))
 
-	bar := statusBar("SEARCH", colYellow, [][2]string{{"esc", "cancel"}, {"⏎", "yank"}, {"⌃N", "new"}}, "fuzzy", m.width)
+	bar := statusBar("SEARCH", colYellow, [][2]string{{"esc", "cancel"}, {"⏎", "yank"}, {"⌃N", "new"}, {"⌃F", "scope"}}, scopeText, m.width)
 	return placed + "\n" + bar
 }
 
@@ -243,7 +256,7 @@ func (m Model) viewEditor() string {
 	if m.editor.editingID == "" {
 		mode = "NEW"
 	}
-	keys := [][2]string{{"⇥", "next field"}, {"⌃S", "save"}, {"esc", "cancel"}}
+	keys := [][2]string{{"⇥", "next field"}, {"⌃E", "$EDITOR"}, {"⌃S", "save"}, {"esc", "cancel"}}
 	right := m.statusLine()
 	if right == "" {
 		right = fmt.Sprintf("%d vars", len(m.editor.commandVars()))
@@ -269,27 +282,33 @@ func (m Model) viewHelp() string {
 		kv("j / k", "move within pane"),
 		kv("h / l · tab", "switch pane"),
 		kv("g / G", "top / bottom"),
-		kv("space", "collapse / expand group"),
-		kv("⏎ · y", "yank command to clipboard"),
+		kv("space", "group: expand · list: select"),
+		kv("⏎ · y", "yank command (fills {{vars}})"),
 		kv("x", "run command in shell"),
 		kv("e / n", "edit / new snippet"),
+		kv("c", "duplicate snippet"),
 		kv("f", "toggle favorite"),
-		kv("dd", "delete snippet"),
-		kv("/ · ⌃P", "fuzzy command palette"),
+		kv("s", "cycle sort (recent/name/uses)"),
+		kv("m / t", "move folder / add tag (selection)"),
+		kv("dd", "delete (with confirm) · u undo"),
+		kv("S / P", "sync · publish to gist"),
+		kv("/ · ⌃P", "fuzzy command palette (⌃F scopes)"),
 		kv("click", "focus / select a pane row"),
 		"",
 		stGreen.Render("Editor"),
 		kv("⇥", "next field (or complete folder)"),
 		kv("→", "accept folder suggestion"),
+		kv("⌃E", "edit body in $EDITOR"),
 		kv("⌃S", "save"),
 		kv("esc", "cancel"),
 		"",
 		stGreen.Render("Variables"),
-		stDim.Render("  Use {{name}} in a command. glyph run prompts for values;"),
-		stDim.Render("  yank copies the template as-is."),
+		stDim.Render("  Use {{name}} in a command. Running or yanking prompts"),
+		stDim.Render("  for values and resolves them live."),
 		"",
-		stGreen.Render("Sync"),
-		stDim.Render("  glyph sync setup gist|file, then glyph sync."),
+		stGreen.Render("Sync & theme"),
+		stDim.Render("  S syncs; P shares a snippet to a secret gist."),
+		stDim.Render("  Set colors via the \"theme\" map in config.json."),
 		"",
 		stFaint.Render("press ? or esc to close"),
 	}

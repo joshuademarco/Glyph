@@ -127,12 +127,17 @@ Vim-style, modal, three panes (folders · list · preview):
 | `j` / `k` | move within the focused pane |
 | `h` / `l` · `tab` | switch pane |
 | `g` / `G` | jump to top / bottom |
-| `⏎` / `y` | yank command to clipboard |
-| `x` | run the command in your shell |
+| `⏎` / `y` | yank command to clipboard (prompts for `{{variables}}`) |
+| `x` | run the command in your shell (prompts for `{{variables}}`) |
 | `e` / `n` | edit / new snippet |
+| `c` | duplicate the selected snippet |
 | `f` | toggle favorite |
-| `dd` | delete |
-| `/` · `⌃P` | fuzzy command palette |
+| `s` | cycle sort (recent → name → uses) |
+| `space` | folders pane: expand/collapse · list pane: multi-select |
+| `m` / `t` | move to folder / add tag (acts on the selection) |
+| `dd` | delete (asks to confirm) · `u` undo the last delete |
+| `S` / `P` | sync now · publish the snippet to a secret gist |
+| `/` · `⌃P` | fuzzy command palette (`⌃F` scopes it to the current folder) |
 | click | focus a pane / select the clicked row (works in the editor too) |
 | `?` | help |
 
@@ -142,6 +147,15 @@ detects `{{variable}}` placeholders and previews the resolved command live.
 Smart groups (Favorites, Recently used, Dangerous) are computed automatically;
 destructive commands (`rm -rf`, `drop table`, `--force`, …) are flagged on
 save.
+
+Snippets can be **multi-selected** in the list pane with `space`, then moved
+(`m`) or tagged (`t`) in bulk; `dd` deletes (after a confirmation) and `u` undoes
+the last delete. `c` duplicates a snippet and `s` cycles the sort order
+(recent → name → uses). Press `S` to sync and `P` to publish the selected
+snippet to a secret gist (its URL is copied to your clipboard). Your tags appear
+as their own section in the sidebar, and the command palette can be scoped to the
+current folder with `⌃F`. In the editor, `⌃E` opens the body in your `$EDITOR`
+for heavier edits.
 
 ## The CLI
 
@@ -172,6 +186,11 @@ glyph run deploy --set name=api --set ns=prod
 glyph edit deploy                      # opens $EDITOR on the body
 glyph rm deploy
 glyph where                            # where data lives
+
+# back up, share, or move your library
+glyph export > backup.json             # dump everything as one JSON document
+glyph export -f Docker -o docker.json  # …or just one folder
+glyph import backup.json               # merge a library back in (matched by id)
 ```
 
 Snippets are referenced by id, unique id-prefix, exact title, or a unique fuzzy
@@ -312,6 +331,23 @@ Override the whole directory with `GLYPH_HOME`.
 
 - `snippets.json`, your library (plain JSON, easy to back up or hand-edit).
 - `config.json`, sync settings (tokens stored `0600`).
+
+### Theming
+
+The TUI palette can be themed: add a `theme` object to `config.json` mapping
+color names to hex values. Recognized names are `bg`, `fg`, `fgDim`, `faint`,
+`border`, `blue`, `green`, `yellow`, `red`, `purple`, and `cyan`:
+
+```json
+{
+  "theme": {
+    "blue": "#7aa2f7",
+    "green": "#9ece6a"
+  }
+}
+```
+
+Partial themes are fine — anything you omit keeps its default.
 
 ## License
 

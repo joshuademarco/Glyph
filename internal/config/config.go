@@ -20,6 +20,10 @@ type Config struct {
 
 	// Editor overrides $EDITOR for the `glyph edit`/external-edit flows.
 	Editor string `json:"editor,omitempty"`
+
+	// Theme overrides TUI palette colors: name -> "#rrggbb". Recognized names:
+	// bg, fg, fgDim, faint, border, blue, green, yellow, red, purple, cyan.
+	Theme map[string]string `json:"theme,omitempty"`
 }
 
 // Dir returns the glyph configuration directory, honouring $GLYPH_HOME first. then the OS convention (XDG / %AppData% / ~/Library).

@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joshuademarco/glyph/internal/clipboard"
+	"github.com/joshuademarco/glyph/internal/config"
 	"github.com/joshuademarco/glyph/internal/model"
 	"github.com/joshuademarco/glyph/internal/store"
 )
@@ -32,13 +33,33 @@ const (
 	focusPreview
 )
 
+// sortMode controls the ordering of the snippet list.
+type sortMode int
+
+const (
+	sortRecent sortMode = iota
+	sortName
+	sortUses
+)
+
+func (s sortMode) label() string {
+	switch s {
+	case sortName:
+		return "name"
+	case sortUses:
+		return "uses"
+	default:
+		return "recent"
+	}
+}
+
 // folderItem is a row in the left sidebar: a smart group, a user group section,
-// or a folder. Groups are pure section headers and never contain snippets directly.
+// a folder, or a tag. Groups are pure section headers and never contain snippets directly.
 type folderItem struct {
 	label     string
 	icon      string
-	kind      string // all | fav | recent | danger | group | folder
-	folder    string // for "group": group name; for "folder": full "Group/Folder" path or single-segment
+	kind      string // all | fav | recent | danger | group | folder | tag
+	folder    string // for "group": group name; for "folder": full path; for "tag": tag name
 	count     int
 	collapsed bool // for kind="group"
 }
@@ -58,37 +79,102 @@ type Model struct {
 
 	snippets []*model.Snippet
 	listIdx  int
+	sortMode sortMode
+
+	// multi-select: snippet ID -> marked
+	marked map[string]bool
+
+	// undo buffer for the most recent delete
+	lastDeleted []*model.Snippet
 
 	// palette overlay
 	paletteOpen bool
+	palScoped   bool
 	palInput    textinput.Model
 	palResults  []*model.Snippet
 	palIdx      int
+
+	// variable-fill overlay
+	varsOpen   bool
+	varSnippet *model.Snippet
+	varNames   []string
+	varInputs  []textinput.Model
+	varIdx     int
+	varAction  varAction
+
+	// single-line prompt overlay (move folder / add tag)
+	promptOpen   bool
+	promptLabel  string
+	promptInput  textinput.Model
+	promptAction promptAction
+
+	// confirmation overlay
+	confirmOpen    bool
+	confirmPrompt  string
+	confirmAction  confirmAction
+	confirmTargets []*model.Snippet
+	confirmRun     *model.Snippet
 
 	editor editorModel
 
 	status     string
 	statusTime time.Time
-	awaitDelD  bool // first 'd' of a 'dd' delete
+	busy       string // non-empty while an async action (sync/share) is in flight
+	awaitDelD  bool   // first 'd' of a 'dd' delete
 
 	quitMsg string
 }
 
+type varAction int
+
+const (
+	varYank varAction = iota
+	varRun
+)
+
+type confirmAction int
+
+const (
+	confirmNone confirmAction = iota
+	confirmDelete
+	confirmBulkDelete
+	confirmRunDanger
+)
+
+type promptAction int
+
+const (
+	promptNone promptAction = iota
+	promptMoveFolder
+	promptAddTag
+)
+
 // New constructs the root model over an open store.
 func New(st *store.Store) Model {
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		applyTheme(cfg.Theme)
+	}
+
 	pi := textinput.New()
 	pi.Prompt = ""
 	pi.Placeholder = "fuzzy search…"
 	pi.TextStyle = stFg
 	pi.PlaceholderStyle = stFaint
 
+	pr := textinput.New()
+	pr.Prompt = ""
+	pr.TextStyle = stFg
+	pr.PlaceholderStyle = stFaint
+
 	m := Model{
-		st:        st,
-		screen:    screenBrowse,
-		focus:     focusFolders,
-		palInput:  pi,
-		editor:    newEditor(),
-		collapsed: map[string]bool{},
+		st:          st,
+		screen:      screenBrowse,
+		focus:       focusFolders,
+		palInput:    pi,
+		promptInput: pr,
+		editor:      newEditor(),
+		collapsed:   map[string]bool{},
+		marked:      map[string]bool{},
 	}
 	m.rebuildFolders()
 	m.refilter()
@@ -179,6 +265,13 @@ func (m *Model) rebuildFolders() {
 		items = append(items, folderItem{label: u, kind: "folder", folder: u, count: c})
 	}
 
+	// Tags section, mirroring the folder tree as a flat list.
+	for _, tag := range lib.Tags() {
+		t := tag
+		c := count(func(s *model.Snippet) bool { return snippetHasTag(s, t) })
+		items = append(items, folderItem{label: t, kind: "tag", folder: t, count: c})
+	}
+
 	m.folders = items
 	if m.folderIdx >= len(items) {
 		m.folderIdx = len(items) - 1
@@ -192,48 +285,72 @@ func isRecent(s *model.Snippet) bool {
 	return s.LastUsed != nil && time.Since(*s.LastUsed) < 14*24*time.Hour
 }
 
-// refilter recomputes the snippet list for the selected sidebar item.
-func (m *Model) refilter() {
+func snippetHasTag(s *model.Snippet, tag string) bool {
+	tag = strings.ToLower(strings.TrimPrefix(tag, "#"))
+	for _, t := range s.Tags {
+		if strings.ToLower(t) == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// currentScopePred returns a predicate matching the snippets under the selected
+// sidebar item. Shared by refilter and the scoped palette.
+func (m Model) currentScopePred() func(*model.Snippet) bool {
 	if len(m.folders) == 0 {
-		m.snippets = nil
-		return
+		return func(*model.Snippet) bool { return true }
 	}
 	fi := m.folders[m.folderIdx]
+	switch fi.kind {
+	case "fav":
+		return func(s *model.Snippet) bool { return s.Favorite }
+	case "recent":
+		return isRecent
+	case "danger":
+		return func(s *model.Snippet) bool { return s.Dangerous }
+	case "group":
+		return func(s *model.Snippet) bool {
+			return s.Folder == fi.folder || strings.HasPrefix(s.Folder, fi.folder+"/")
+		}
+	case "folder":
+		return func(s *model.Snippet) bool { return s.Folder == fi.folder }
+	case "tag":
+		return func(s *model.Snippet) bool { return snippetHasTag(s, fi.folder) }
+	default: // all
+		return func(*model.Snippet) bool { return true }
+	}
+}
+
+// refilter recomputes the snippet list for the selected sidebar item.
+func (m *Model) refilter() {
+	pred := m.currentScopePred()
 	var out []*model.Snippet
 	for _, s := range m.st.Lib.Snippets {
-		keep := false
-		switch fi.kind {
-		case "all":
-			keep = true
-		case "fav":
-			keep = s.Favorite
-		case "recent":
-			keep = isRecent(s)
-		case "danger":
-			keep = s.Dangerous
-		case "group":
-			keep = s.Folder == fi.folder || strings.HasPrefix(s.Folder, fi.folder+"/")
-		case "folder":
-			keep = s.Folder == fi.folder
-		}
-		if keep {
+		if pred(s) {
 			out = append(out, s)
 		}
 	}
-	// recent first
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].UpdatedAt.After(out[i].UpdatedAt) {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
+	m.sortSnippets(out)
 	m.snippets = out
 	if m.listIdx >= len(out) {
 		m.listIdx = len(out) - 1
 	}
 	if m.listIdx < 0 {
 		m.listIdx = 0
+	}
+}
+
+func (m *Model) sortSnippets(out []*model.Snippet) {
+	switch m.sortMode {
+	case sortName:
+		sort.SliceStable(out, func(i, j int) bool {
+			return strings.ToLower(out[i].Title) < strings.ToLower(out[j].Title)
+		})
+	case sortUses:
+		sort.SliceStable(out, func(i, j int) bool { return out[i].UseCount > out[j].UseCount })
+	default:
+		sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	}
 }
 
@@ -257,6 +374,26 @@ func (m *Model) toggleGroup(group string) {
 func (m *Model) selected() *model.Snippet {
 	if m.listIdx >= 0 && m.listIdx < len(m.snippets) {
 		return m.snippets[m.listIdx]
+	}
+	return nil
+}
+
+// targets returns the marked snippets, or the single selected one when nothing
+// is marked.
+func (m Model) targets() []*model.Snippet {
+	if len(m.marked) > 0 {
+		var out []*model.Snippet
+		for _, s := range m.st.Lib.Snippets {
+			if m.marked[s.ID] {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	if s := m.selected(); s != nil {
+		return []*model.Snippet{s}
 	}
 	return nil
 }
@@ -288,9 +425,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case syncDoneMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.flash("sync failed: %v", msg.err)
+		} else {
+			m.rebuildFolders()
+			m.refilter()
+			if msg.res != nil {
+				m.flash("synced: %d pulled, %d pushed", msg.res.Pulled, msg.res.Pushed)
+			} else {
+				m.flash("synced ✓")
+			}
+		}
+		return m, nil
+
+	case shareDoneMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.flash("share failed: %v", msg.err)
+		} else {
+			_ = clipboard.Copy(msg.url)
+			m.flash("shared → %s (url copied)", msg.url)
+		}
+		return m, nil
+
+	case externalEditMsg:
+		if msg.err != nil {
+			m.flash("editor: %v", msg.err)
+		} else if msg.ok {
+			m.editor.command.SetValue(msg.content)
+			m.flash("loaded from external editor")
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.paletteOpen {
 			return m.updatePalette(msg)
+		}
+		if m.varsOpen {
+			return m.updateVars(msg)
+		}
+		if m.promptOpen {
+			return m.updatePrompt(msg)
+		}
+		if m.confirmOpen {
+			return m.updateConfirm(msg)
 		}
 		switch m.screen {
 		case screenEditor:
@@ -357,6 +537,23 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if cur.kind == "group" {
 				m.toggleGroup(cur.folder)
 			}
+			return m, nil
+		}
+		if m.focus == focusList {
+			if s := m.selected(); s != nil {
+				if m.marked[s.ID] {
+					delete(m.marked, s.ID)
+				} else {
+					m.marked[s.ID] = true
+				}
+				m.move(1)
+			}
+		}
+		return m, nil
+	case "esc":
+		if len(m.marked) > 0 {
+			m.marked = map[string]bool{}
+			m.flash("selection cleared")
 		}
 		return m, nil
 	case "y":
@@ -368,6 +565,9 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "n":
 		m.openEditor(nil)
+		return m, nil
+	case "c":
+		m.duplicateSelected()
 		return m, nil
 	case "f":
 		if s := m.selected(); s != nil {
@@ -381,6 +581,46 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "x":
 		return m.runSelected()
+	case "s":
+		m.sortMode = (m.sortMode + 1) % 3
+		m.refilter()
+		m.flash("sort: %s", m.sortMode.label())
+		return m, nil
+	case "m":
+		if t := m.targets(); len(t) > 0 {
+			init := ""
+			if len(t) == 1 {
+				init = t[0].Folder
+			}
+			m.openPrompt(promptMoveFolder, "Move to folder: ", init)
+		}
+		return m, nil
+	case "t":
+		if len(m.targets()) > 0 {
+			m.openPrompt(promptAddTag, "Add tag: ", "")
+		}
+		return m, nil
+	case "u":
+		m.undoDelete()
+		return m, nil
+	case "S":
+		if m.busy != "" {
+			return m, nil
+		}
+		m.busy = "syncing…"
+		m.flash("syncing…")
+		return m, m.syncCmd()
+	case "P":
+		s := m.selected()
+		if s == nil {
+			return m, nil
+		}
+		if m.busy != "" {
+			return m, nil
+		}
+		m.busy = "sharing…"
+		m.flash("sharing to gist…")
+		return m, m.shareCmd(s)
 	case "d":
 		m.awaitDelD = true
 		return m, nil
@@ -414,6 +654,10 @@ func (m Model) yankSelected() (tea.Model, tea.Cmd) {
 	if s == nil {
 		return m, nil
 	}
+	if len(s.Variables()) > 0 {
+		(&m).openVarOverlay(s, varYank)
+		return m, nil
+	}
 	if err := clipboard.Copy(s.Command); err != nil {
 		m.flash("copy failed: %v", err)
 		return m, nil
@@ -424,17 +668,75 @@ func (m Model) yankSelected() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) deleteSelected() (tea.Model, tea.Cmd) {
+// duplicateSelected clones the selected snippet under a new id and "(copy)" title.
+func (m *Model) duplicateSelected() {
 	s := m.selected()
 	if s == nil {
-		return m, nil
+		return
 	}
-	m.st.Lib.Remove(s.ID)
+	c := *s
+	c.ID = ""
+	c.Title = s.Title + " (copy)"
+	c.UseCount = 0
+	c.LastUsed = nil
+	c.Favorite = false
+	c.CreatedAt = time.Time{}
+	c.Tags = append([]string(nil), s.Tags...)
+	m.st.Lib.Add(&c)
 	_ = m.st.Save()
 	m.rebuildFolders()
 	m.refilter()
-	m.flash("deleted %q", short(s.Title, 28))
+	for i, sn := range m.snippets {
+		if sn.ID == c.ID {
+			m.listIdx = i
+			break
+		}
+	}
+	m.flash("duplicated %q", short(s.Title, 24))
+}
+
+func (m *Model) undoDelete() {
+	if len(m.lastDeleted) == 0 {
+		m.flash("nothing to undo")
+		return
+	}
+	now := time.Now().UTC()
+	m.st.Lib.Snippets = append(m.st.Lib.Snippets, m.lastDeleted...)
+	m.st.Lib.UpdatedAt = now
+	n := len(m.lastDeleted)
+	m.lastDeleted = nil
+	_ = m.st.Save()
+	m.rebuildFolders()
+	m.refilter()
+	m.flash("restored %d snippet(s)", n)
+}
+
+// deleteSelected opens a confirmation for the current target set (marked or
+// selected). The actual removal happens in updateConfirm.
+func (m Model) deleteSelected() (tea.Model, tea.Cmd) {
+	t := m.targets()
+	if len(t) == 0 {
+		return m, nil
+	}
+	m.confirmTargets = t
+	if len(t) == 1 {
+		m.openConfirm(confirmDelete, fmt.Sprintf("delete %q?", short(t[0].Title, 28)))
+	} else {
+		m.openConfirm(confirmBulkDelete, fmt.Sprintf("delete %d snippets?", len(t)))
+	}
 	return m, nil
+}
+
+func (m *Model) performDelete(t []*model.Snippet) {
+	m.lastDeleted = append([]*model.Snippet(nil), t...)
+	for _, s := range t {
+		m.st.Lib.Remove(s.ID)
+	}
+	m.marked = map[string]bool{}
+	_ = m.st.Save()
+	m.rebuildFolders()
+	m.refilter()
+	m.flash("deleted %d snippet(s) — u to undo", len(t))
 }
 
 type runFinishedMsg struct{ err error }
@@ -444,8 +746,18 @@ func (m Model) runSelected() (tea.Model, tea.Cmd) {
 	if s == nil {
 		return m, nil
 	}
+	if s.Dangerous {
+		m.confirmRun = s
+		m.openConfirm(confirmRunDanger, fmt.Sprintf("⚠ %q looks destructive — run it?", short(s.Title, 24)))
+		return m, nil
+	}
+	return m.doRun(s)
+}
+
+// doRun fills variables (if any) then executes the snippet body in the shell.
+func (m Model) doRun(s *model.Snippet) (tea.Model, tea.Cmd) {
 	if len(s.Variables()) > 0 {
-		m.flash("has variables — use `glyph run` in the CLI to fill them")
+		(&m).openVarOverlay(s, varRun)
 		return m, nil
 	}
 	s.MarkUsed(time.Now().UTC())
@@ -468,8 +780,25 @@ func (m *Model) openPalette() {
 	m.paletteOpen = true
 	m.palInput.SetValue("")
 	m.palInput.Focus()
-	m.palResults = m.st.Search("")
+	m.palResults = m.scopedSearch("")
 	m.palIdx = 0
+}
+
+// scopedSearch runs the fuzzy search, optionally narrowed to the current
+// sidebar scope.
+func (m Model) scopedSearch(q string) []*model.Snippet {
+	res := m.st.Search(q)
+	if !m.palScoped {
+		return res
+	}
+	pred := m.currentScopePred()
+	out := make([]*model.Snippet, 0, len(res))
+	for _, s := range res {
+		if pred(s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (m Model) updatePalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -477,6 +806,11 @@ func (m Model) updatePalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "ctrl+c":
 		m.paletteOpen = false
 		m.palInput.Blur()
+		return m, nil
+	case "ctrl+f":
+		m.palScoped = !m.palScoped
+		m.palResults = m.scopedSearch(m.palInput.Value())
+		m.palIdx = clamp(m.palIdx, 0, max(0, len(m.palResults)-1))
 		return m, nil
 	case "up", "ctrl+k":
 		m.palIdx = clamp(m.palIdx-1, 0, len(m.palResults)-1)
@@ -493,20 +827,37 @@ func (m Model) updatePalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", "tab":
 		if m.palIdx >= 0 && m.palIdx < len(m.palResults) {
 			s := m.palResults[m.palIdx]
+			m.paletteOpen = false
+			m.palInput.Blur()
+			if len(s.Variables()) > 0 {
+				// jump to the list selection then fill variables
+				m.selectByID(s.ID)
+				(&m).openVarOverlay(s, varYank)
+				return m, nil
+			}
 			_ = clipboard.Copy(s.Command)
 			s.MarkUsed(time.Now().UTC())
 			_ = m.st.Save()
-			m.paletteOpen = false
-			m.palInput.Blur()
 			m.flash("yanked %q", short(s.Title, 28))
 		}
 		return m, nil
 	}
 	var cmd tea.Cmd
 	m.palInput, cmd = m.palInput.Update(msg)
-	m.palResults = m.st.Search(m.palInput.Value())
+	m.palResults = m.scopedSearch(m.palInput.Value())
 	m.palIdx = clamp(m.palIdx, 0, max(0, len(m.palResults)-1))
 	return m, cmd
+}
+
+// selectByID best-effort moves the list cursor to the snippet with the given id
+// within the current filter (used after palette actions).
+func (m *Model) selectByID(id string) {
+	for i, s := range m.snippets {
+		if s.ID == id {
+			m.listIdx = i
+			return
+		}
+	}
 }
 
 // --- editor delegation ---
@@ -528,6 +879,9 @@ func (m Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+s":
 		return m.saveEditor()
+	case "ctrl+e":
+		// shell out to $EDITOR on the command body
+		return m, m.externalEditorCmd(m.editor.command.Value())
 	case "tab":
 		// On the folder field, Tab first completes the suggestion; with nothing
 		// left to complete it advances to the next field.
@@ -584,6 +938,15 @@ func (m Model) View() string {
 	if m.paletteOpen {
 		return m.viewPalette()
 	}
+	if m.varsOpen {
+		return m.viewVars()
+	}
+	if m.promptOpen {
+		return m.viewPrompt()
+	}
+	if m.confirmOpen {
+		return m.viewConfirm()
+	}
 	switch m.screen {
 	case screenEditor:
 		return m.viewEditor()
@@ -618,13 +981,30 @@ func browseLayout(w, h int) browseGeo {
 	return browseGeo{folderW, rightW, contentH, listBoxH, previewBoxH}
 }
 
+// dividerBefore returns the section-divider label to draw before sidebar row i,
+// or "" for none. Shared by folderBody (render) and folderRowToIdx (clicks).
+func (m Model) dividerBefore(i int) string {
+	isFolderish := func(k string) bool { return k == "group" || k == "folder" }
+	cur := m.folders[i].kind
+	prev := ""
+	if i > 0 {
+		prev = m.folders[i-1].kind
+	}
+	if isFolderish(cur) && !isFolderish(prev) {
+		return "Folders"
+	}
+	if cur == "tag" && prev != "tag" {
+		return "Tags"
+	}
+	return ""
+}
+
 // folderRowToIdx maps each rendered sidebar body line to a folder index, or -1
-// for the non-selectable "Folders" divider — mirroring folderBody's layout.
+// for a non-selectable divider — mirroring folderBody's layout.
 func (m Model) folderRowToIdx() []int {
 	var rows []int
-	isFolderish := func(k string) bool { return k == "group" || k == "folder" }
-	for i, f := range m.folders {
-		if isFolderish(f.kind) && (i == 0 || !isFolderish(m.folders[i-1].kind)) {
+	for i := range m.folders {
+		if m.dividerBefore(i) != "" {
 			rows = append(rows, -1)
 		}
 		rows = append(rows, i)
@@ -634,7 +1014,7 @@ func (m Model) folderRowToIdx() []int {
 
 // handleClick moves focus (and selects a row) based on which pane was clicked.
 func (m Model) handleClick(x, y int) Model {
-	if m.paletteOpen {
+	if m.paletteOpen || m.varsOpen || m.promptOpen || m.confirmOpen {
 		return m
 	}
 	if m.screen == screenEditor {

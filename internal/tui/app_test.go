@@ -127,9 +127,51 @@ func TestDeleteSequence(t *testing.T) {
 	if !m.awaitDelD {
 		t.Fatal("expected to await second d")
 	}
-	m = sendKey(m, "d") // second d -> delete
+	m = sendKey(m, "d") // second d -> opens delete confirmation
+	if !m.confirmOpen {
+		t.Fatal("expected a delete confirmation overlay")
+	}
+	m = sendKey(m, "y") // confirm
 	if got := len(m.st.Lib.Snippets); got != before-1 {
-		t.Fatalf("expected %d snippets after dd, got %d", before-1, got)
+		t.Fatalf("expected %d snippets after dd+y, got %d", before-1, got)
+	}
+}
+
+func TestUndoRestoresDeleted(t *testing.T) {
+	m := seededModel(t)
+	before := len(m.st.Lib.Snippets)
+	m = sendKey(m, "l")
+	m = sendKey(m, "d")
+	m = sendKey(m, "d")
+	m = sendKey(m, "y") // confirm delete
+	if got := len(m.st.Lib.Snippets); got != before-1 {
+		t.Fatalf("expected %d after delete, got %d", before-1, got)
+	}
+	m = sendKey(m, "u") // undo
+	if got := len(m.st.Lib.Snippets); got != before {
+		t.Fatalf("expected %d after undo, got %d", before, got)
+	}
+}
+
+func TestVariableOverlayOpensOnYank(t *testing.T) {
+	m := seededModel(t)
+	m = sendKey(m, "l")     // focus list
+	m = sendKey(m, "G")     // jump to bottom; both seeds have {{vars}}
+	m = sendKey(m, "enter") // yank -> should open the fill overlay
+	if !m.varsOpen {
+		t.Fatal("expected variable-fill overlay to open for a snippet with {{vars}}")
+	}
+	if len(m.varInputs) == 0 {
+		t.Fatal("expected at least one variable input")
+	}
+}
+
+func TestSortCycle(t *testing.T) {
+	m := seededModel(t)
+	start := m.sortMode
+	m = sendKey(m, "s")
+	if m.sortMode == start {
+		t.Fatal("expected sort mode to change on 's'")
 	}
 }
 

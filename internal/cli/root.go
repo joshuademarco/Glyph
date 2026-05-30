@@ -51,6 +51,8 @@ func newRoot() *cobra.Command {
 		searchCmd(),
 		rmCmd(),
 		editCmd(),
+		exportCmd(),
+		importCmd(),
 		tuiCmd(),
 		syncCmd(),
 		whereCmd(),
